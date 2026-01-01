@@ -5,103 +5,158 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netdb.h>
+#include <pthread.h> // NEW: Library for threading
 
 #define PORT 8888
-#define BUFFER_SIZE 4096  // Size of our "Notepad" to write down requests
+#define BUFFER_SIZE 4096
 
-// --- NEW FUNCTION: The Conversation Handler ---
-void handle_client(int client_socket) {
+// --- BLACKLIST CHECKER ---
+int check_forbidden(char *url) {
+    char *banned_list[] = {"google", "youtube", "facebook"};
+    int list_size = 3;
+    for (int i = 0; i < list_size; i++) {
+        if (strstr(url, banned_list[i]) != NULL) return 1;
+    }
+    return 0;
+}
+
+// --- HOSTNAME EXTRACTOR ---
+void extract_host(char *url, char *host) {
+    char *start = strstr(url, "://");
+    if (start) start += 3;
+    else start = url;
+    
+    char *end = strchr(start, '/');
+    if (end) {
+        strncpy(host, start, end - start);
+        host[end - start] = '\0';
+    } else {
+        strcpy(host, start);
+    }
+    char *colon = strchr(host, ':');
+    if (colon) *colon = '\0';
+}
+
+// --- THE CLONED WORKER (Thread Function) ---
+// This function now returns void* and takes void* because threads require it
+void *handle_client(void *socket_desc) {
+    // Get the socket ID from the argument
+    int client_socket = *(int*)socket_desc;
+    free(socket_desc); // Free the memory we allocated in main
+
     char buffer[BUFFER_SIZE];
     int bytes_read;
 
-    // 1. CLEAR THE NOTEPAD
-    // We fill the buffer with zeros so there is no junk data from before.
+    // 1. Read Request
     memset(buffer, 0, BUFFER_SIZE);
-
-    // 2. LISTEN (Receive Data)
-    // recv() attempts to read data from the phone line.
-    // It puts the data into 'buffer' and tells us how many letters it read.
     bytes_read = recv(client_socket, buffer, BUFFER_SIZE - 1, 0);
-    
-    if (bytes_read < 0) {
-        perror("Error reading from socket");
-        return;
-    }
-    
-    if (bytes_read == 0) {
-        printf("Client disconnected unexpectedly.\n");
-        return;
+    if (bytes_read <= 0) {
+        close(client_socket);
+        return NULL;
     }
 
-    // 3. SHOW ME WHAT THEY SAID
-    printf("\n--- NEW REQUEST RECEIVED ---\n");
-    printf("%s\n", buffer);
-    printf("----------------------------\n");
-
-    // 4. PARSE (Read the handwriting)
-    // We want to find the first line: e.g., "GET http://google.com HTTP/1.1"
+    // 2. Parse URL
     char method[16], url[2048], version[16];
-    
-    // sscanf is a tool that scans a string and extracts words.
-    // It looks for 3 words separated by spaces.
+    char host[1024];
     sscanf(buffer, "%s %s %s", method, url, version);
-
-    printf("Parsed Data:\n");
-    printf("Method:  %s\n", method); // e.g., GET
-    printf("URL:     %s\n", url);    // e.g., http://google.com
     
-    // 5. SEND A FAKE REPLY (Just for now)
-    // We need to be polite and say something back, or the browser will hang.
-    char *response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nHello! I am your Proxy.";
-    send(client_socket, response, strlen(response), 0);
+    // 3. Security Check
+    if (check_forbidden(url) == 1) {
+        printf("THREAD %ld: Blocked access to %s\n", pthread_self(), url);
+        char *error_msg = "HTTP/1.1 403 Forbidden\r\n\r\nACCESS DENIED";
+        send(client_socket, error_msg, strlen(error_msg), 0);
+        close(client_socket);
+        return NULL;
+    }
+    
+    // 4. Connect to Real Server
+    extract_host(url, host);
+    printf("THREAD %ld: Handling %s\n", pthread_self(), host);
 
-    // 6. HANG UP
+    struct hostent *server_info = gethostbyname(host);
+    if (server_info == NULL) {
+        printf("Error: Unknown host %s\n", host);
+        close(client_socket);
+        return NULL;
+    }
+
+    int server_socket = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in server_addr;
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(80);
+    memcpy(&server_addr.sin_addr.s_addr, server_info->h_addr, server_info->h_length);
+
+    if (connect(server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Connection failed");
+        close(client_socket);
+        close(server_socket);
+        return NULL;
+    }
+
+    send(server_socket, buffer, bytes_read, 0);
+
+    // 5. Relay Data
+    while ((bytes_read = recv(server_socket, buffer, BUFFER_SIZE, 0)) > 0) {
+        send(client_socket, buffer, bytes_read, 0);
+    }
+
+    close(server_socket);
     close(client_socket);
+    return NULL;
 }
 
-// --- MAIN SETUP ---
 int main() {
     int server_fd, new_socket;
     struct sockaddr_in address;
     int addrlen = sizeof(address);
 
-    // Create Socket
     if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
         perror("Socket failed");
         exit(EXIT_FAILURE);
     }
     
-    // Prepare Address
+    int opt = 1;
+    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = INADDR_ANY;
     address.sin_port = htons(PORT);
 
-    // Bind
     if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
         perror("Bind failed");
         exit(EXIT_FAILURE);
     }
 
-    // Listen
-    if (listen(server_fd, 3) < 0) {
+    if (listen(server_fd, 10) < 0) { // Increased backlog to 10
         perror("Listen failed");
         exit(EXIT_FAILURE);
     }
 
-    printf("Server is listening on port %d...\n", PORT);
+    printf("Multi-Threaded Proxy listening on port %d...\n", PORT);
 
-    // --- INFINITE LOOP ---
-    // The server never sleeps. It waits for a call, handles it, then waits for the next.
     while (1) {
-        // Accept a call
-        if ((new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen)) < 0) {
+        // Wait for a connection
+        new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen);
+        if (new_socket < 0) {
             perror("Accept failed");
-            continue; // If one call fails, just wait for the next one
+            continue;
         }
 
-        // Handle the call using our new function
-        handle_client(new_socket);
-    }
+        // --- THE MAGIC: Create a new thread ---
+        pthread_t thread_id;
+        
+        // We allocate memory for the socket ID so the thread gets its own copy
+        int *pclient = malloc(sizeof(int));
+        *pclient = new_socket;
 
+        if (pthread_create(&thread_id, NULL, handle_client, (void*)pclient) < 0) {
+            perror("Could not create thread");
+            free(pclient);
+        }
+        
+        // detach means "Fire and Forget". The main program doesn't wait for the thread to finish.
+        pthread_detach(thread_id);
+    }
     return 0;
 }
