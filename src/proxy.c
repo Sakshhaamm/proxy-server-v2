@@ -13,11 +13,25 @@
 
 // --- BLACKLIST CHECKER ---
 int check_forbidden(char *url) {
-    char *banned_list[] = {"google", "youtube", "facebook"};
-    int list_size = 3;
-    for (int i = 0; i < list_size; i++) {
-        if (strstr(url, banned_list[i]) != NULL) return 1;
+    FILE *file = fopen("blocked.txt", "r");
+    if (file == NULL) {
+        printf("Warning: Could not open blocked.txt. Nothing blocked.\n");
+        return 0;
     }
+
+    char line[256];
+    while (fgets(line, sizeof(line), file)) {
+        // Remove newline character at the end of the line if it exists
+        line[strcspn(line, "\n")] = 0;
+        
+        // Check if the line is not empty and is found in the URL
+        if (strlen(line) > 0 && strstr(url, line) != NULL) {
+            fclose(file);
+            return 1; // It IS forbidden!
+        }
+    }
+    
+    fclose(file);
     return 0;
 }
 

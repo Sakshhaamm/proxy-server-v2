@@ -1,0 +1,27 @@
+# Proxy Server Design Document
+
+## 1. High Level Architecture
+The system is a **Multi-Threaded HTTP Forward Proxy**.
+[Client] <---> [Proxy Server] <---> [Internet/Remote Server]
+
+1. **Client** sends an HTTP request to the Proxy.
+2. **Proxy** parses the request to find the target Hostname.
+3. **Proxy** checks the Hostname against a `blocked.txt` file (Filtering).
+4. **Proxy** resolves the Hostname IP (DNS Lookup).
+5. **Proxy** connects to the Remote Server and forwards the request.
+6. **Remote Server** replies; Proxy relays data back to the Client.
+
+## 2. Concurrency Model
+**Model Used:** Thread-per-Connection.
+**Rationale:** We used the POSIX Threads (`pthread`) library. The main server loop listens on a socket. When a new connection arrives, `pthread_create` spawns a dedicated worker thread. This ensures that slow website requests do not block other users. Detached threads are used to automatically reclaim resources upon completion.
+
+## 3. Data Flow
+1. **Receive:** `recv()` reads raw bytes from client.
+2. **Parse:** `sscanf` extracts the Method (GET), URL, and Protocol.
+3. **Filter:** `check_forbidden()` scans the URL against loaded rules.
+4. **Connect:** `gethostbyname()` + `socket()` + `connect()` establishes upstream link.
+5. **Relay:** A loop uses `recv()` from server and `send()` to client until 0 bytes are received.
+
+## 4. Limitations
+- Only handles HTTP (Port 80). HTTPS (CONNECT method) is not currently implemented.
+- No caching mechanism; every request fetches fresh data.
