@@ -147,6 +147,7 @@ void *handle_client(void *args) {
 }
 
 int main() {
+    setbuf(stdout, NULL); 
     load_config(); // Load Port from file
 
     int server_fd, new_socket;

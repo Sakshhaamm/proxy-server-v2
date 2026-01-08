@@ -1,0 +1,4 @@
+2026-01-08 15:52:09 [INFO] Client 127.0.0.1:41438 requested example.com:80 "GET http://example.com/ HTTP/1.1" -> ALLOWED (200 OK, 1256 bytes)
+2026-01-08 15:53:05 [INFO] Client 127.0.0.1:41439 requested example.com:80 "HEAD http://example.com/ HTTP/1.1" -> ALLOWED (200 OK, 0 bytes)
+2026-01-08 15:53:43 [INFO] Client 127.0.0.1:41440 requested badsite.org:80 "GET http://badsite.org/ HTTP/1.1" -> ALLOWED (308 Permanent Redirect, 180 bytes)
+2026-01-08 15:55:12 [INFO] Client 127.0.0.1:41442 requested wikipedia.org:80 "GET http://wikipedia.org/ HTTP/1.1" -> BLOCKED (403 Forbidden, 0 bytes)
